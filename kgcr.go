@@ -61,7 +61,7 @@ func main() {
 	}
 
 	currentContextName := rawConfig.CurrentContext
-	log.Printf("Using context: %s", currentContextName)
+	// log.Printf("Using context: %s", currentContextName)
 
 	// Build the rest config using the current context
 	config, err := kubeConfig.ClientConfig()
@@ -85,7 +85,7 @@ func main() {
 		}
 	}
 
-	log.Printf("Scanning namespace: %s", *namespace)
+	// log.Printf("Scanning namespace: %s", *namespace)
 
 	// Suppress deprecation warnings
 	config.WarningHandler = rest.NewWarningWriter(io.Discard, rest.WarningWriterOptions{})
@@ -110,7 +110,7 @@ func main() {
 		log.Fatalf("Error listing CRDs: %s", err.Error())
 	}
 
-	log.Printf("Found %d CRDs in the cluster.", len(crdList.Items))
+	// log.Printf("Found %d CRDs in the cluster.", len(crdList.Items))
 
 	// Create channels for job distribution and results
 	jobs := make(chan crdJob, len(crdList.Items))
