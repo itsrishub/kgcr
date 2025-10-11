@@ -37,19 +37,10 @@ type crdJob struct {
 }
 
 func main() {
-	// Setup Kubeconfig and command-line flags ---
-	kubeconfig := flag.String("kubeconfig", "", "(optional) absolute path to the kubeconfig file. If not set, uses KUBECONFIG env var or default locations")
-
-	// Define a namespace flag with "default" as the default value
-	namespace := flag.String("namespace", "", "the namespace to scan for custom resources. If not specified, the current context's namespace is used.")
+	namespace := flag.String("n", "", "the namespace to scan for custom resources. If not specified, the current context's namespace is used.")
 	flag.Parse()
 
-	// Load the kubeconfig to get current context information
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	// Only set explicit path if kubeconfig flag is provided
-	if *kubeconfig != "" {
-		loadingRules.ExplicitPath = *kubeconfig
-	}
 
 	configOverrides := &clientcmd.ConfigOverrides{}
 	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
