@@ -1,0 +1,33 @@
+name: release
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  goreleaser:
+    container:
+      image: ubuntu:24.04
+    environment: release
+    steps:
+      - name: Install dependencies
+        run: |
+          apt update && apt install -y curl
+          apt install -y git
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Unshallow
+        run:  |
+          git config --global --add safe.directory /__w/terraform-provider-kcs/terraform-provider-kcs
+          git fetch --prune --unshallow
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.19"
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v5
+        with:
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
