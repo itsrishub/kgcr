@@ -11,17 +11,15 @@ import (
 	"sort"
 	"sync"
 	"text/tabwriter"
+	"time"
 
-	// Kubernetes API Machinery
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	// Kubernetes Client-Go libraries
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	// Apiextensions client for listing CRDs
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 )
@@ -33,12 +31,19 @@ type foundResource struct {
 }
 
 type crdJob struct {
-	crd apiextensionsv1.CustomResourceDefinition
+	crd           apiextensionsv1.CustomResourceDefinition
+	storedVersion string                      // Pre-compute stored version
+	gvr           schema.GroupVersionResource // Pre-compute GVR
 }
 
 func main() {
 	namespace := flag.String("n", "", "the namespace to scan for custom resources. If not specified, the current context's namespace is used.")
+	timeout := flag.Duration("timeout", 30*time.Second, "timeout for the operation")
 	flag.Parse()
+
+	// Create context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
 
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 
@@ -61,8 +66,8 @@ func main() {
 	}
 
 	// Increase QPS and Burst to avoid client-side throttling
-	config.QPS = 50
-	config.Burst = 100
+	config.QPS = 100
+	config.Burst = 200
 
 	// If the namespace flag is not set, get it from the current context
 	if *namespace == "" {
@@ -81,8 +86,6 @@ func main() {
 	// Suppress deprecation warnings
 	config.WarningHandler = rest.NewWarningWriter(io.Discard, rest.WarningWriterOptions{})
 
-	// Create the necessary clients ---
-
 	// Apiextensions client to list all the CRDs
 	apiextensionsClient, err := apiextensionsclientset.NewForConfig(config)
 	if err != nil {
@@ -96,33 +99,70 @@ func main() {
 	}
 
 	// List all CRDs in the cluster ---
-	crdList, err := apiextensionsClient.ApiextensionsV1().CustomResourceDefinitions().List(context.TODO(), metav1.ListOptions{})
+	crdList, err := apiextensionsClient.ApiextensionsV1().CustomResourceDefinitions().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		log.Fatalf("Error listing CRDs: %s", err.Error())
 	}
 
-	// log.Printf("Found %d CRDs in the cluster.", len(crdList.Items))
+	// Pre-process CRDs and filter out cluster-scoped resources
+	var namespacedCRDs []crdJob
+	for _, crd := range crdList.Items {
+		// Skip cluster-scoped resources
+		if crd.Spec.Scope != "Namespaced" {
+			continue
+		}
 
-	// Create channels for job distribution and results
-	jobs := make(chan crdJob, len(crdList.Items))
-	results := make(chan []foundResource, len(crdList.Items))
+		storedVersion := getStoredVersion(&crd)
+		if storedVersion == "" {
+			continue
+		}
 
-	// Determine number of workers based on CPU cores
-	numWorkers := runtime.NumCPU() * 2
-	if numWorkers > len(crdList.Items) {
-		numWorkers = len(crdList.Items)
+		gvr := schema.GroupVersionResource{
+			Group:    crd.Spec.Group,
+			Version:  storedVersion,
+			Resource: crd.Spec.Names.Plural,
+		}
+
+		namespacedCRDs = append(namespacedCRDs, crdJob{
+			crd:           crd,
+			storedVersion: storedVersion,
+			gvr:           gvr,
+		})
+	}
+
+	if len(namespacedCRDs) == 0 {
+		fmt.Printf("No namespaced custom resources found in cluster\n")
+		return
+	}
+
+	// Create buffered channels for better throughput
+	jobs := make(chan crdJob, len(namespacedCRDs))
+	results := make(chan []foundResource, len(namespacedCRDs))
+
+	// Determine optimal number of workers
+	numWorkers := runtime.NumCPU() * 3
+	if numWorkers > len(namespacedCRDs) {
+		numWorkers = len(namespacedCRDs)
+	}
+	if numWorkers > 20 {
+		numWorkers = 20 // Cap at 20 to avoid overwhelming the API server
 	}
 
 	// Start worker goroutines
 	var wg sync.WaitGroup
 	for w := 0; w < numWorkers; w++ {
 		wg.Add(1)
-		go crdWorker(w, jobs, results, dynamicClient, *namespace, &wg)
+		go crdWorker(ctx, w, jobs, results, dynamicClient, *namespace, &wg)
 	}
 
 	// Send jobs to workers
-	for _, crd := range crdList.Items {
-		jobs <- crdJob{crd: crd}
+	for _, job := range namespacedCRDs {
+		select {
+		case jobs <- job:
+		case <-ctx.Done():
+			close(jobs)
+			log.Fatalf("Timeout while sending jobs: %v", ctx.Err())
+		}
 	}
 	close(jobs)
 
@@ -132,8 +172,10 @@ func main() {
 		close(results)
 	}()
 
+	// Pre-allocate result slice with estimated capacity
+	allResults := make([]foundResource, 0, len(namespacedCRDs)*10)
+
 	// Collect all results
-	var allResults []foundResource
 	for workerResults := range results {
 		allResults = append(allResults, workerResults...)
 	}
@@ -163,31 +205,47 @@ func main() {
 }
 
 // crdWorker processes CRD jobs concurrently
-func crdWorker(id int, jobs <-chan crdJob, results chan<- []foundResource, dynamicClient dynamic.Interface, namespace string, wg *sync.WaitGroup) {
+func crdWorker(ctx context.Context, id int, jobs <-chan crdJob, results chan<- []foundResource, dynamicClient dynamic.Interface, namespace string, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	for job := range jobs {
-		crd := job.crd
-		var workerResults []foundResource
+	// Pre-allocate a reusable slice for results
+	workerResults := make([]foundResource, 0, 50)
 
-		// For each CRD, we need to construct its GroupVersionResource (GVR)
-		gvr := schema.GroupVersionResource{
-			Group:    crd.Spec.Group,
-			Version:  getStoredVersion(&crd),
-			Resource: crd.Spec.Names.Plural,
+	for job := range jobs {
+		// Check context cancellation
+		select {
+		case <-ctx.Done():
+			return
+		default:
 		}
 
+		// Clear the slice but keep the underlying array
+		workerResults = workerResults[:0]
+
+		// Use pre-computed GVR
+		gvr := job.gvr
+
+		// Create a sub-context with a shorter timeout for individual requests
+		reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+
 		// Use the dynamic client to list all instances of the CRD in the specified namespace
-		resourceList, err := dynamicClient.Resource(gvr).Namespace(namespace).List(context.TODO(), metav1.ListOptions{})
+		resourceList, err := dynamicClient.Resource(gvr).Namespace(namespace).List(reqCtx, metav1.ListOptions{})
+		cancel()
+
 		if err != nil {
-			// Skip CRDs that error out (e.g., cluster-scoped resources when querying namespace)
+			// Skip CRDs that error out
 			continue
 		}
 
 		if len(resourceList.Items) > 0 {
+			// Pre-allocate with exact size
+			if cap(workerResults) < len(resourceList.Items) {
+				workerResults = make([]foundResource, 0, len(resourceList.Items))
+			}
+
 			for _, item := range resourceList.Items {
 				workerResults = append(workerResults, foundResource{
-					crdName:      crd.Name,
+					crdName:      job.crd.Name,
 					resourceName: gvr.Resource,
 					instanceName: item.GetName(),
 				})
@@ -195,7 +253,15 @@ func crdWorker(id int, jobs <-chan crdJob, results chan<- []foundResource, dynam
 		}
 
 		if len(workerResults) > 0 {
-			results <- workerResults
+			// Create a copy to send through the channel
+			resultsCopy := make([]foundResource, len(workerResults))
+			copy(resultsCopy, workerResults)
+
+			select {
+			case results <- resultsCopy:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}
 }
