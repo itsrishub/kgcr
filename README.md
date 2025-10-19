@@ -8,7 +8,7 @@ A fast and efficient Kubernetes tool for discovering Custom Resources (CRs) in y
 
 ## Overview
 
-`kgcr` (kubectl get CustomResources) is a command-line tool that scans a specified Kubernetes namespace and lists all custom resource instances found. It's designed to be fast and efficient by using concurrent workers to query multiple Custom Resource Definitions (CRDs) in parallel.
+`kgcr` (kubectl get CustomResources) is a command-line tool that scans and lists all custom resource instances found. It's designed to be fast and efficient by using concurrent workers to query multiple Custom Resource Definitions (CRDs) in parallel.
 
 ## Features
 
