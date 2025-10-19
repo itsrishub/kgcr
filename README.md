@@ -2,6 +2,8 @@
 
 A fast and efficient Kubernetes tool for discovering Custom Resources (CRs) in your cluster namespaces.
 
+[![GitHub release](https://img.shields.io/github/release/itsrishub/logster.svg)](https://github.com/itsrishub/logster/releases) [![GitHub Actions](https://img.shields.io/github/actions/workflow/status/itsrishub/logster/release.yml?branch=main)](https://github.com/itsrishub/logster/actions) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Rust](https://img.shields.io/badge/rust-%23000000.svg?style=flat&logo=rust&logoColor=white)](https://www.rust-lang.org/)
+
 ## Overview
 
 `kgcr` (kubectl get CustomResources) is a command-line tool that scans a specified Kubernetes namespace and lists all custom resource instances found. It's designed to be fast and efficient by using concurrent workers to query multiple Custom Resource Definitions (CRDs) in parallel.
