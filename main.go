@@ -14,6 +14,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"k8s.io/client-go/dynamic"
@@ -28,6 +29,7 @@ type foundResource struct {
 	crdName      string
 	resourceName string
 	instanceName string
+	namespace    string // Add namespace field
 }
 
 type crdJob struct {
@@ -38,6 +40,9 @@ type crdJob struct {
 
 func main() {
 	namespace := flag.String("n", "", "the namespace to scan for custom resources. If not specified, the current context's namespace is used.")
+	flag.StringVar(namespace, "namespace", "", "the namespace to scan for custom resources. If not specified, the current context's namespace is used.")
+	allNamespaces := flag.Bool("A", false, "scan all namespaces")
+	flag.BoolVar(allNamespaces, "all-namespaces", false, "scan all namespaces")
 	timeout := flag.Duration("timeout", 30*time.Second, "timeout for the operation")
 	flag.Parse()
 
@@ -70,7 +75,7 @@ func main() {
 	config.Burst = 200
 
 	// If the namespace flag is not set, get it from the current context
-	if *namespace == "" {
+	if *namespace == "" && !*allNamespaces {
 		// Get namespace from the current context
 		currentContext := rawConfig.Contexts[currentContextName]
 		if currentContext != nil && currentContext.Namespace != "" {
@@ -79,6 +84,11 @@ func main() {
 			// If no namespace in context, default to "default"
 			*namespace = "default"
 		}
+	}
+
+	// If allNamespaces is set, clear the namespace to scan all
+	if *allNamespaces {
+		*namespace = ""
 	}
 
 	// log.Printf("Scanning namespace: %s", *namespace)
@@ -152,7 +162,7 @@ func main() {
 	var wg sync.WaitGroup
 	for w := 0; w < numWorkers; w++ {
 		wg.Add(1)
-		go crdWorker(ctx, w, jobs, results, dynamicClient, *namespace, &wg)
+		go crdWorker(ctx, w, jobs, results, dynamicClient, *namespace, *allNamespaces, &wg)
 	}
 
 	// Send jobs to workers
@@ -188,24 +198,38 @@ func main() {
 		if allResults[i].resourceName != allResults[j].resourceName {
 			return allResults[i].resourceName < allResults[j].resourceName
 		}
+		if allResults[i].namespace != allResults[j].namespace {
+			return allResults[i].namespace < allResults[j].namespace
+		}
 		return allResults[i].instanceName < allResults[j].instanceName
 	})
 
 	if len(allResults) > 0 {
 		w := new(tabwriter.Writer)
 		w.Init(os.Stdout, 0, 8, 1, '\t', 0)
-		fmt.Fprintln(w, "CRD\tRESOURCE\tNAME")
-		for _, res := range allResults {
-			fmt.Fprintf(w, "%s\t%s\t%s\n", res.crdName, res.resourceName, res.instanceName)
+		if *allNamespaces {
+			fmt.Fprintln(w, "NAMESPACE\tCRD\tRESOURCE\tNAME")
+			for _, res := range allResults {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", res.namespace, res.crdName, res.resourceName, res.instanceName)
+			}
+		} else {
+			fmt.Fprintln(w, "CRD\tRESOURCE\tNAME")
+			for _, res := range allResults {
+				fmt.Fprintf(w, "%s\t%s\t%s\n", res.crdName, res.resourceName, res.instanceName)
+			}
 		}
 		w.Flush()
 	} else {
-		fmt.Printf("No custom resources found in namespace: %s\n", *namespace)
+		if *allNamespaces {
+			fmt.Printf("No custom resources found in any namespace\n")
+		} else {
+			fmt.Printf("No custom resources found in namespace: %s\n", *namespace)
+		}
 	}
 }
 
 // crdWorker processes CRD jobs concurrently
-func crdWorker(ctx context.Context, id int, jobs <-chan crdJob, results chan<- []foundResource, dynamicClient dynamic.Interface, namespace string, wg *sync.WaitGroup) {
+func crdWorker(ctx context.Context, id int, jobs <-chan crdJob, results chan<- []foundResource, dynamicClient dynamic.Interface, namespace string, allNamespaces bool, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	// Pre-allocate a reusable slice for results
@@ -229,7 +253,15 @@ func crdWorker(ctx context.Context, id int, jobs <-chan crdJob, results chan<- [
 		reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 
 		// Use the dynamic client to list all instances of the CRD in the specified namespace
-		resourceList, err := dynamicClient.Resource(gvr).Namespace(namespace).List(reqCtx, metav1.ListOptions{})
+		var resourceList *unstructured.UnstructuredList
+		var err error
+		if allNamespaces || namespace == "" {
+			// List across all namespaces
+			resourceList, err = dynamicClient.Resource(gvr).List(reqCtx, metav1.ListOptions{})
+		} else {
+			// List in specific namespace
+			resourceList, err = dynamicClient.Resource(gvr).Namespace(namespace).List(reqCtx, metav1.ListOptions{})
+		}
 		cancel()
 
 		if err != nil {
@@ -248,6 +280,7 @@ func crdWorker(ctx context.Context, id int, jobs <-chan crdJob, results chan<- [
 					crdName:      job.crd.Name,
 					resourceName: gvr.Resource,
 					instanceName: item.GetName(),
+					namespace:    item.GetNamespace(),
 				})
 			}
 		}
