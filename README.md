@@ -28,7 +28,7 @@ A fast and efficient Kubernetes tool for discovering Custom Resources (CRs) in y
 ```bash
 git clone https://github.com/yourusername/kgcr.git
 cd kgcr
-go build -o kgcr kgcr.go
+go build -o kgcr main.go
 ```
 
 ### Install with go install
@@ -53,6 +53,17 @@ Scan a specific namespace:
 
 ```bash
 kgcr -n production
+or
+kgcr -namespace production
+```
+### All namespaces
+
+Scan a specific namespace:
+
+```bash
+kgcr -A
+or
+kgcr -all-namespaces
 ```
 
 ### Set custom timeout
