@@ -17,7 +17,7 @@ case "$ARCH" in
     *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
 esac
 
-echo "🧭 Detected: $OS-$ARCH"
+echo "Detected: $OS-$ARCH"
 
 # --- Create temp directory ---
 TMP_DIR=$(mktemp -d)

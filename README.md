@@ -20,13 +20,17 @@ A fast and efficient Kubernetes tool for discovering Custom Resources (CRs) in y
 
 ## Installation
 
-### Prerequisites
+```bash
+curl -fsSL https://raw.githubusercontent.com/itsrishub/kgcr/main/install.sh | sudo bash
+```
+
+### Build from source
+
+#### Prerequisites
 
 - Go 1.19 or higher
 - Access to a Kubernetes cluster
 - Valid kubeconfig file
-
-### Build from source
 
 ```bash
 git clone https://github.com/yourusername/kgcr.git
