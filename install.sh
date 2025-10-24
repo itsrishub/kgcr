@@ -28,7 +28,7 @@ TAR_NAME="${BINARY_NAME}_${VERSION}_${OS}_${ARCH}.tar.gz"
 DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${TAR_NAME}"
 
 echo "Downloading from: $DOWNLOAD_URL"
-curl -fsSL "$DOWNLOAD_URL" -o "$TAR_NAME"
+curl -fsSLk "$DOWNLOAD_URL" -o "$TAR_NAME"
 
 # --- Extract and move ---
 tar -xzf "$TAR_NAME"
